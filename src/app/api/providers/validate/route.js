@@ -3,6 +3,7 @@ import { getProviderNodeById } from "@/models";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider, AI_PROVIDERS } from "@/shared/constants/providers";
 import { getDefaultModel } from "open-sse/config/providerModels.js";
 import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl, PROVIDERS } from "open-sse/config/providers.js";
+import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-to-commandcode.js";
 import { resolveQoderCredentials, resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
 import {
@@ -441,9 +442,11 @@ export async function POST(request) {
         case "commandcode": {
           const cfg = PROVIDERS.commandcode;
           const model = getDefaultModel("commandcode");
-          // Probe the surface generation actually uses: the Provider API takes the
-          // OpenAI body. (The CLI-only /alpha/generate probe this used to send a
-          // CLI envelope to is version- and region-gated for external callers.)
+          const payload = openaiToCommandCodeRequest(model, {
+            messages: [{ role: "user", content: "ping" }],
+            max_tokens: 1,
+            stream: false,
+          }, false);
           const res = await fetch(cfg.baseUrl, {
             method: "POST",
             headers: {
@@ -452,12 +455,7 @@ export async function POST(request) {
               "x-session-id": crypto.randomUUID(),
               "Authorization": `Bearer ${apiKey}`,
             },
-            body: JSON.stringify({
-              model,
-              messages: [{ role: "user", content: "ping" }],
-              max_tokens: 1,
-              stream: false,
-            }),
+            body: JSON.stringify(payload),
           });
           isValid = res.status !== 401 && res.status !== 403;
           break;
