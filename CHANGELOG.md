@@ -1,6 +1,8 @@
 # v0.5.104 (2026-10-15)
 
 ## Features
+- **SenseNova**: add OpenAI-compatible chat, multimodal, and image-generation provider
+- **SenseNova**: validate API-key connections through the `/v1/models` probe
 - **Gemini**: add Gemini 4 Argon (`gemini`/`vertex`, plus a `high` tier on Antigravity) — non-dismissible gemini-level thinking, 1M context, Vertex defaults to `global` location
 - **Usage**: Cursor IDE quota via DashboardService (spend + request buckets) (#4689)
 - **Cursor**: resolve Auto (Server Picks) to the account's default agent model (#4692)
