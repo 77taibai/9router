@@ -301,7 +301,9 @@ export function calculatePercentage(used, total) {
  */
 export function getRemainingPercentage(quota) {
   if (quota?.percentage !== undefined) {
-    return Math.max(0, Math.round(quota.percentage));
+    // Providers may report the used share; the UI renders the remaining one.
+    const value = quota.percentageIsUsed === true ? 100 - quota.percentage : quota.percentage;
+    return Math.max(0, Math.round(value));
   }
 
   if (quota?.remaining !== undefined) {
@@ -739,7 +741,7 @@ export function parseQuotaData(provider, data) {
         break;
 
       case "ollama":
-        // Session (5h) / Weekly (7d) / Monthly usage % from ollama.com/api/usage.
+        // Session (5h) / Weekly (7d) / Monthly usage % from ollama.com/api/balance (or /api/usage).
         // remainingPercentage only — no absolute remaining (UI treats remaining as %).
         if (data.quotas) {
           Object.entries(data.quotas).forEach(([name, quota]) => {
@@ -749,6 +751,10 @@ export function parseQuotaData(provider, data) {
               total: quota.total || 0,
               resetAt: quota.resetAt || null,
               remainingPercentage: quota.remainingPercentage,
+              isCreditBalance: quota.isCreditBalance,
+              currency: quota.currency,
+              unit: quota.unit,
+              unlimited: quota.unlimited,
             });
           });
         }

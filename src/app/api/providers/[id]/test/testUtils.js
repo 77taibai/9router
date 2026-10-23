@@ -28,6 +28,7 @@ import {
   KIMCHI_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
+import { hasWebIdentityProbe, fetchWebIdentity } from "open-sse/services/webIdentity.js";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -237,7 +238,7 @@ function parseProviderErrorMessage(bodyText, fallback) {
 
 async function probeCloudCodeAssistAccess(connection, accessToken, effectiveProxy = null) {
   const userAgent = connection.provider === "antigravity"
-    ? "google-api-nodejs-client/9.15.1 vscode-antigravity/1.107.0"
+    ? (ANTIGRAVITY_CONFIG.loadCodeAssistUserAgent || "antigravity/hub/2.24.0 darwin/arm64")
     : "google-api-nodejs-client/9.15.1 gemini-cli/0.34.0";
 
   const res = await fetchWithConnectionProxy(CLOUD_CODE_ASSIST_TEST_URL, {
@@ -572,6 +573,17 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
     } catch (err) {
       return { valid: false, error: err.message };
     }
+  }
+
+  // Web-cookie providers: a session probe (identity/lightweight endpoint) is the
+  // only meaningful test — the generic key probes have no way to read a cookie
+  // header. An inconclusive probe keeps the connection active so a network
+  // hiccup cannot mark a healthy session as broken.
+  if (hasWebIdentityProbe(connection.provider)) {
+    const identity = await fetchWebIdentity(connection.provider, connection.apiKey || "");
+    if (identity.status === "valid") return { valid: true, error: null };
+    if (identity.status === "invalid") return { valid: false, error: identity.error };
+    return { valid: true, error: `Could not verify the session: ${identity.error}` };
   }
 
   try {
