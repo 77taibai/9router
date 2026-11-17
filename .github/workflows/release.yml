@@ -1,0 +1,141 @@
+name: Build and publish release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: "Branch, tag, or commit to build"
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    name: Build webpack bundle and publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref || github.sha }}
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Determine release identity
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD)"
+          short_commit="${commit:0:12}"
+
+          if [[ "$EVENT_NAME" == "push" && "$REF_TYPE" == "tag" && "$REF_NAME" == v* ]]; then
+            release_tag="$REF_NAME"
+            prerelease=false
+            version="${release_tag#v}"
+            if [[ ! "$release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+              echo "::error::Expected a semver tag such as v0.5.104, received: ${release_tag}"
+              exit 1
+            fi
+            root_version="$(node -p "require('./package.json').version")"
+            cli_version="$(node -p "require('./cli/package.json').version")"
+            if [[ "$root_version" != "$version" || "$cli_version" != "$version" ]]; then
+              echo "::error::Tag ${release_tag} does not match package versions (root=${root_version}, cli=${cli_version})"
+              exit 1
+            fi
+          else
+            release_tag="build-${short_commit}"
+            prerelease=true
+          fi
+
+          {
+            echo "tag=${release_tag}"
+            echo "prerelease=${prerelease}"
+            echo "archive=9router-${release_tag}.tar.gz"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build frontend with webpack
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+          NODE_ENV: production
+        run: npm run build
+
+      - name: Package standalone release
+        run: |
+          set -euo pipefail
+          package_dir="$RUNNER_TEMP/9router-release"
+          rm -rf "$package_dir"
+          mkdir -p "$package_dir/.next"
+
+          cp -a .next/standalone/. "$package_dir/"
+          cp -a .next/static "$package_dir/.next/static"
+          cp -a public "$package_dir/public"
+          cp -a open-sse "$package_dir/open-sse"
+          mkdir -p "$package_dir/src"
+          cp -a src/mitm "$package_dir/src/mitm"
+          cp -a custom-server.js "$package_dir/custom-server.js"
+
+          cat > "$package_dir/README.txt" <<'EOF'
+          9Router standalone release
+
+          Requirements: Node.js >= 18
+
+          Start:
+            HOSTNAME=0.0.0.0 PORT=20128 node custom-server.js
+          EOF
+
+          tar -C "$package_dir" -czf "$RUNNER_TEMP/${{ steps.release.outputs.archive }}" .
+          sha256sum "$RUNNER_TEMP/${{ steps.release.outputs.archive }}" > "$RUNNER_TEMP/${{ steps.release.outputs.archive }}.sha256"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: 9router-${{ steps.release.outputs.tag }}
+          path: |
+            ${{ runner.temp }}/${{ steps.release.outputs.archive }}
+            ${{ runner.temp }}/${{ steps.release.outputs.archive }}.sha256
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          ARCHIVE: ${{ runner.temp }}/${{ steps.release.outputs.archive }}
+          CHECKSUM: ${{ runner.temp }}/${{ steps.release.outputs.archive }}.sha256
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$ARCHIVE" "$CHECKSUM" --clobber
+          else
+            prerelease_args=()
+            if [[ "${{ steps.release.outputs.prerelease }}" == "true" ]]; then
+              prerelease_args+=(--prerelease)
+            fi
+            gh release create "$RELEASE_TAG" "$ARCHIVE" "$CHECKSUM" "${prerelease_args[@]}" \
+              --title "9Router ${RELEASE_TAG}" \
+              --generate-notes
+          fi
